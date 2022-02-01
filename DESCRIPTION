@@ -1,0 +1,36 @@
+Package: clusteredErrorsSims
+Title: Support package for multiple small number of cluster simulations
+Version: 0.1
+Authors@R: 
+    c(
+    person(given = "Alexander",
+           family = "Fischer",
+           role = c("aut", "cre"),
+           email = "alexander-fischer1801@t-online.de")
+    )
+Description: Support package for multiple small number of cluster simulations
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.1.2
+Imports: 
+  arm, 
+  mvtnorm, 
+  ggplot2, 
+  dplyr, 
+  data.table, 
+  RColorBrewer, 
+  ggthemes, 
+  fishmethods, 
+  fwildclusterboot, 
+  wildboottestjlr,
+  patchwork, 
+  clubSandwich, 
+  future.apply, 
+  future,
+  progressr
+Remotes: 
+  s3alfisc/wildboottestjlr
+
+        
+  
