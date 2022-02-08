@@ -15,13 +15,13 @@
 # The shared cluster contribution to variance in x and e leads to a correlation between x and e,
 # which can bias estimates?
 gen_cluster <-
-  function(param = c(.1, .5),
-           n = 1000,
-           n_cluster = 50,
-           rho = .5,
-           balanced_cluster = TRUE,
-           did = FALSE,
-           treatment_state = NULL) {
+  function(param,
+           n,
+           n_cluster,
+           rho,
+           balanced_cluster,
+           did,
+           treatment_states) {
     # Required package: mvtnorm
 
     while (n %% n_cluster != 0){
@@ -41,45 +41,55 @@ gen_cluster <-
     # So, if rho = 1, the individual level draw essentially contributes nothing to X.
     # As you will see below, cluster contribution will drive all the variation in the observed variable in that situation.
     Sigma_i <- matrix(c(1, 0, 0, 1 - rho), ncol = 2)
+    # print(solve(Sigma_i))
     values_i <- rmvnorm(n = n, sigma = Sigma_i)
     x_i <- values_i[, 1]
     error_i <- values_i[, 2]
 
-    # Now we are going to assign the above datapoints to clusters, evenly.
-    if(balanced_cluster == TRUE){
-      cluster_name <- rep(1:n_cluster, each = n / n_cluster)
-    } else {
-      state_pop <- get_state_freq()
-      if(length(unique(state_pop$state)) %% n_cluster != 0){
-        stop("If using 'balanced_cluster = FALSE', n_cluster must be divisible by 50.")
+    # guarantee that at least one obs is in treatment
+    unique_x <- 0
+    while(unique_x != 2){
+      # Now we are going to assign the above datapoints to clusters, evenly.
+      if(balanced_cluster == TRUE){
+        cluster_name <- rep(1:n_cluster, each = n / n_cluster)
+      } else {
+        state_pop <- get_state_freq()
+        if(length(unique(state_pop$state)) %% n_cluster != 0){
+          stop("If using 'balanced_cluster = FALSE', n_cluster must be divisible by 50.")
+        }
+        cluster_name <- sample(x = 1:length(state_pop$state),
+                               size = n,
+                               replace = TRUE,
+                               prob = state_pop$population_share)
       }
-      cluster_name <- sample(x = 1:length(state_pop$state),
-                             size = n,
-                             replace = TRUE,
-                             prob = state_pop$population_share)
-    }
 
-    # For X and error, simulated above, we assign each observation to a cluster.
-    # The assigned cluster will then shift each observation's pair X and error by a pair of values drawn from another bivariate normal distribution.
-    # The cluster-specific contribution to error will have a variance of rho, again just because?
-    # We are now simulating distributional draws that will serve as the cluster-specific contributions to X and error.
-    Sigma_cl <- matrix(c(1, 0, 0, rho), ncol = 2)
-    values_cl <- rmvnorm(n = n_cluster, sigma = Sigma_cl)
-    x_cl <- rep(values_cl[, 1], each = n / n_cluster)
-    error_cl <- rep(values_cl[, 2], each = n / n_cluster)
+      # For X and error, simulated above, we assign each observation to a cluster.
+      # The assigned cluster will then shift each observation's pair X and error by a pair of values drawn from another bivariate normal distribution.
+      # The cluster-specific contribution to error will have a variance of rho, again just because?
+      # We are now simulating distributional draws that will serve as the cluster-specific contributions to X and error.
+      Sigma_cl <- matrix(c(1, 0, 0, rho), ncol = 2)
+      # print(solve(Sigma_cl))
 
-    # Finally, we simulate y as a function of our betas, and the X and error we just simulated.
+      values_cl <- rmvnorm(n = n_cluster, sigma = Sigma_cl)
+      x_cl <- rep(values_cl[, 1], each = n / n_cluster)
+      error_cl <- rep(values_cl[, 2], each = n / n_cluster)
 
-    if(did == FALSE){
-      # Now we stick together the individual level values and their cluster-specific contributions.
-      x <- x_i + x_cl
+      # Finally, we simulate y as a function of our betas, and the X and error we just simulated.
       error <- error_i + error_cl
-      y <- param[1] + param[2] * x + error
-    } else if(did == TRUE){
-      # dummy variable for treatment_state, "no state level"
-      x <- ifelse(cluster_name %in% treatment_states, 1, 0)
-      y <- param[1] + param[2] * x + error
-    }
+
+      if(did == FALSE){
+        # Now we stick together the individual level values and their cluster-specific contributions.
+        x <- x_i + x_cl
+        y <- param[1] + param[2] * x + error
+      } else if(did == TRUE){
+        # dummy variable for treatment_state, "no state level"
+        x <- ifelse(cluster_name %in% treatment_states, 1, 0)
+        y <- param[1] + param[2] * x + error
+      }
+
+       unique_x <- length(unique(x))
+
+  }
 
     df_tmp <-
       data.frame(x, y, cluster = cluster_name, x_i, x_cl, error, error_i, error_cl)
@@ -92,15 +102,15 @@ gen_cluster <-
 # For each simulation iteration, simulate clustered data with the provided params.
 # Then estimate the linear regression model, store the beta, and the standard errors + confidence intervals.
 # Calculate the inference naively, with regular clustering, or fast and wild cluster bootstrap (good for few clusters).
-cluster_sim <- function(param = c(.1, .5),
-                        n = 1000,
-                        n_cluster = 50,
-                        rho = .5,
-                        inference = "regular",
-                        FE = FALSE,
-                        balanced_cluster = TRUE,
-                        boot = "fwildclusterboot",
-                        did = FALSE) {
+cluster_sim <- function(param,
+                        n,
+                        n_cluster,
+                        rho,
+                        inference,
+                        balanced_cluster,
+                        did,
+                        treatment_states,
+                        boot) {
   # Required packages: multiwayvcov, fwildclusterboot
 
   # Note we have to do some weirdness here because of the way the boottest function is coded.
@@ -112,16 +122,17 @@ cluster_sim <- function(param = c(.1, .5),
       n_cluster = n_cluster,
       rho = rho,
       balanced_cluster = balanced_cluster,
-      did = did
+      did = did,
+      treatment_states = treatment_states
     )
 
-  x_err_cor <- cor(df_it$x,df_it$error)
+  #x_err_cor <- cor(df_it$x,df_it$error)
 
-  if (FE == TRUE) {
-    fit <- lm(data = df_it, y ~ x + factor(cluster))
-  } else {
+  # if (FE == TRUE) {
+  #   fit <- lm(data = df_it, y ~ x + factor(cluster))
+  # } else {
     fit <- lm(data = df_it, y ~ x)
-  }
+  #}
 
   b1 <- coef(fit)[2]
 
@@ -151,7 +162,7 @@ cluster_sim <- function(param = c(.1, .5),
       suppressWarnings(boot <-
                          fwildclusterboot::boottest(
                            fit,
-                           B = 9999,
+                           B = 499,
                            param = "x",
                            clustid = "cluster",
                            type = weights
@@ -160,7 +171,7 @@ cluster_sim <- function(param = c(.1, .5),
       suppressWarnings(boot <-
                          wildboottestjlr::boottest(
                            fit,
-                           B = 9999,
+                           B = 499,
                            param = "x",
                            clustid = "cluster",
                            type = weights
@@ -196,7 +207,7 @@ cluster_sim <- function(param = c(.1, .5),
     b1_ci95 <- c(lower, upper)
   }
 
-  return(c(b1, b1_ci95, x_err_cor))
+  return(c(b1, b1_ci95))
 }
 
 # Lastly, a function to iterate / repeat the simulation.
@@ -209,11 +220,12 @@ run_cluster_sim <-
            n_cluster = 50,
            rho = .5,
            inference = "regular",
-           FE = FALSE,
+           # FE = FALSE,
            balanced_cluster = TRUE,
            workers = 8,
            did = FALSE,
-           treatment_states = NULL) {
+           treatment_states = NULL,
+           boot = "fwildclusterboot") {
 
     #'@import future
     # Required packages: dplyr
@@ -235,7 +247,11 @@ run_cluster_sim <-
                                                      rho = rho,
                                                      n_cluster = n_cluster,
                                                      inference = inference,
-                                                     FE = FE)
+                                                     # FE = FE,
+                                                     boot = boot,
+                                                     balanced_cluster = balanced_cluster,
+                                                     did = did,
+                                                     treatment_states = treatment_states)
 
                                       })
 
@@ -255,7 +271,7 @@ run_cluster_sim <-
 
     df_res <- as.data.frame(Reduce(rbind, df_res))
     #df_res <- as.data.frame(t(df_res))
-    names(df_res) <- c('b1', 'ci95_lower', 'ci95_upper','x_err_cor')
+    names(df_res) <- c('b1', 'ci95_lower', 'ci95_upper')
     df_res <- df_res %>%
       mutate(id = 1:n(),
              param_caught = ci95_lower <= param[2] &
@@ -333,4 +349,192 @@ get_state_freq <- function(){
   dt[, list(state, population_share)]
 }
 
+
+
+cluster_sim_wildly <- function(param,
+                                n,
+                                n_cluster,
+                                rho,
+                                inference,
+                                balanced_cluster,
+                                did,
+                                treatment_states,
+                                boot) {
+  # Required packages: multiwayvcov, fwildclusterboot
+
+  # Note we have to do some weirdness here because of the way the boottest function is coded.
+  # We need df_it to be a global variable, because boottest looks for it implicitly in global memory.
+  df_it <<-
+    gen_cluster(
+      param = param,
+      n = n ,
+      n_cluster = n_cluster,
+      rho = rho,
+      balanced_cluster = balanced_cluster,
+      did = did,
+      treatment_states = treatment_states
+    )
+
+  #x_err_cor <- cor(df_it$x,df_it$error)
+
+  # if (FE == TRUE) {
+  #   fit <- lm(data = df_it, y ~ x + factor(cluster))
+  # } else {
+  fit <- lm(data = df_it, y ~ x)
+  #}
+
+  b1 <- coef(fit)[2]
+
+  # if (inference == "regular") {
+  #   Sigma <- stats::vcov(fit)
+  #   b1_ci95 <- stats::confint(fit)[2, ]
+  # } else if (inference == "clustered") {
+
+    # regular
+    Sigma <- suppressMessages(clubSandwich::vcovCR(fit,
+                                                   cluster = df_it$cluster,
+                                                   type = "CR1S"))
+    conf_int <- suppressMessages(clubSandwich::conf_int(obj = fit,
+                                                        vcov = Sigma ,
+                                                        test = "z",
+                                                        level = 0.95,
+                                                        coefs = "x"))
+    lower <- conf_int$CI_L
+    upper <- conf_int$CI_U
+    b1_ci95_a <- c(lower, upper)
+
+  # } else if (inference == "fast_n_wild") {
+
+    # fast_n_wild
+    # Per Roodman et al. 2019, employ Webb weights if cluster count <= 12.
+    if (n_cluster <= 12) {
+      weights = "webb"
+    } else {
+      weights = "rademacher"
+    }
+    if(boot == "fwildclusterboot"){
+      suppressWarnings(boot <-
+                         fwildclusterboot::boottest(
+                           fit,
+                           B = 499,
+                           param = "x",
+                           clustid = "cluster",
+                           type = weights
+                         ))
+    } else if (boot == "wildboottestjlr"){
+      suppressWarnings(boot <-
+                         wildboottestjlr::boottest(
+                           fit,
+                           B = 499,
+                           param = "x",
+                           clustid = "cluster",
+                           type = weights
+                         ))
+    }
+
+    lower <- boot$conf_int[1]
+    upper <- boot$conf_int[2]
+    b1_ci95_b <- c(lower, upper)
+  # } else if(inference == "Satterthwaite"){
+
+    # Satterthwaite
+    Sigma <- suppressMessages(clubSandwich::vcovCR(fit,
+                                                   cluster = df_it$cluster,
+                                                   type = "CR2"))
+    conf_int <- suppressMessages(clubSandwich::conf_int(obj = fit,
+                                                        vcov = Sigma ,
+                                                        test = "Satterthwaite",
+                                                        level = 0.95,
+                                                        coefs = "x"))
+    lower <- conf_int$CI_L
+    upper <- conf_int$CI_U
+    b1_ci95_c <- c(lower, upper)
+  # } else if(inference == "saddlepoint"){
+  #   Sigma <- suppressMessages(clubSandwich::vcovCR(fit,
+  #                                                  cluster = df_it$cluster,
+  #                                                  type = "CR2"))
+  #   conf_int <- suppressMessages(clubSandwich::conf_int(obj = fit,
+  #                                                       vcov = Sigma ,
+  #                                                       test = "saddlepoint",
+  #                                                       level = 0.95,
+  #                                                       coefs = "x"))
+  #   lower <- conf_int$CI_L
+  #   upper <- conf_int$CI_U
+  #   b1_ci95 <- c(lower, upper)
+  # }
+
+
+  return(t(matrix(c(b1, b1_ci95_a, 1, b1, b1_ci95_b,2, b1, b1_ci95_c, 3),
+                  4, 3)))
+}
+
+
+
+run_cluster_sim_wildly <-
+  function(n_sims = 1000,
+           param = c(.1, .5),
+           n = 1000,
+           n_cluster = 50,
+           rho = .5,
+           # inference = "regular",
+           # FE = FALSE,
+           balanced_cluster = TRUE,
+           workers = 8,
+           did = FALSE,
+           treatment_states = NULL,
+           boot = "fwildclusterboot") {
+
+    #'@import future
+    # Required packages: dplyr
+
+    # cat(paste0("inference: ", inference), "\n")
+    #if(inference != "fast_n_wild"){
+    future::plan(multisession, workers = workers)
+    progressr::handlers("progress")
+
+    progressr::with_progress({
+      p <- progressor(along = 1:n_sims)
+      df_res <-
+        future.apply::future_lapply(X = 1:n_sims,
+                                    future.seed = sample(1:10000000, 1),
+                                    FUN = function(x){
+                                      p(sprintf("x=%g", x))
+                                      cluster_sim_wildly(param = param,
+                                                  n = n,
+                                                  rho = rho,
+                                                  n_cluster = n_cluster,
+                                                  inference = inference,
+                                                  # FE = FE,
+                                                  boot = boot,
+                                                  balanced_cluster = balanced_cluster,
+                                                  did = did,
+                                                  treatment_states = treatment_states)
+
+                                    })
+
+    })
+    #} else if(inference == "fast_n_wild") {
+    # future.apply runs into problems if tryCatch happens to catch an error
+    # df_res <-
+    #           replicate(n_sims,
+    #                     cluster_sim(param = param,
+    #                                 n = n,
+    #                                 rho = rho,
+    #                                 n_cluster = n_cluster,
+    #                                 inference = inference,
+    #                                 FE = FE)
+    #                     )
+    #}
+
+    df_res2 <- data.table::as.data.table(Reduce(rbind, df_res))
+    #df_res <- as.data.frame(t(df_res))
+    names(df_res2) <- c('b1', 'ci95_lower', 'ci95_upper', 'type')
+    df_res2 <- df_res2[, param_caught:= data.table::fifelse(ci95_lower <= param[2] & ci95_upper >= param[2], TRUE, FALSE)]
+
+    # df_res <- df_res2 %>%
+    #   mutate(id = 1:n(),
+    #          param_caught = ci95_lower <= param[2] &
+    #            ci95_upper >= param[2])
+    return(df_res2)
+  }
 

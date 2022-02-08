@@ -1,4 +1,4 @@
-wildly_different_sim <- function(n = 2000, workers = 8, n_sims = 1000, did = FALSE, treatment_states = NULL){
+wildly_different_sim <- function(n = 2000, workers = 8, n_sims = 50000, did = FALSE, treatment_states = NULL){
 
   # ----------------------------------------------------------------------
   # Wildly Different Cluster Sizes (US states relative sizes)
@@ -77,7 +77,8 @@ wildly_different_sim <- function(n = 2000, workers = 8, n_sims = 1000, did = FAL
                               rho = x,
                               n_cluster = j,
                               inference = "fast_n_wild",
-                              workers = workers)
+                              workers = workers,
+                              boot = "fwildclusterboot")
             mean_CI_coverage_fw[i] <- mean(sim_clustered_fix_tmp$param_caught)
             sd_CI_coverage_fw[i] <- sd(sim_clustered_fix_tmp$param_caught)
             i <- i + 1
@@ -140,14 +141,20 @@ wildly_different_sim <- function(n = 2000, workers = 8, n_sims = 1000, did = FAL
   res_wildly_different[, clusters2:= paste("G =", clusters)]
   res_wildly_different[, clusters2 := factor(clusters2, levels = c("G = 50", "G = 100"))]
 
+  #res_wildly_different <- readRDS("res_wildly_different.rds")
   saveRDS(res_wildly_different, "res_wildly_different_10000.rds")
+
+  #res_wildly_different <- readRDS("res_wildly_different.rds")
+  res_wildly_different[type == "fast_n_wild"]$type <- "Wild Cluster Bootstrap"
+  res_wildly_different[type == "clustered"]$type <- "CRVE"
 
   plot <-
   ggplot(data = res_wildly_different[type != "regular"], aes(x = rho, y = coverage * 100, group = type, color = type, fill = type)) +
     facet_wrap(~ clusters2) +
     geom_hline(yintercept=95,color="red",size=1,linetype="dashed")+
-    geom_line(size = 2) +
-    xlab("intra-cluster correlation rho (5000 Sims Each)") +
+    geom_line(size = 1) +
+    geom_point() +
+    xlab("intra-cluster correlation rho (10.000 Sims Each)") +
     ylab("Avg 95% CI Coverage of True Beta") +
     theme_classic() +
     theme(
@@ -168,7 +175,7 @@ wildly_different_sim <- function(n = 2000, workers = 8, n_sims = 1000, did = FAL
 
 
 
-  ggsave("wildly_different.png", width = 8, height = 4)
+  ggsave("wildly_different.png", width = 9, height = 4)
 
   plot
 
